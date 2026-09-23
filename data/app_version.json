@@ -1,0 +1,5 @@
+{
+  "latestVersion": "1.0.0",
+  "updateUrl": "REPLACE_ME_APP_STORE_OR_PLAY_STORE_URL",
+  "notes": "Manifeste initial — mettre à jour latestVersion/updateUrl/notes à chaque nouveau build à proposer. updateUrl à remplacer par le vrai lien App Store / Play Store dès publication (placeholder volontaire, jamais une URL inventée)."
+}
