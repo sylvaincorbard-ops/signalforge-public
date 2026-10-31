@@ -1,0 +1,107 @@
+# Snapshot ANFR en tuiles → Cloudflare Pages (projet signalforge-anfr).
+#
+# Source : data.gouv « Données sur les réseaux mobiles » (ANFR, Licence
+# Ouverte 2.0), publiée chaque semaine (le jeudi). Le workflow tourne tous
+# les jours mais ne republie que si une nouvelle version est sortie
+# (--skip-if-same). Chaque publication commite data/anfr/index.json : garde
+# une trace des snapshots ET évite la désactivation des workflows planifiés
+# après 60 jours sans activité sur le dépôt.
+#
+# Secrets : CLOUDFLARE_API_TOKEN (Cloudflare Pages: Edit), CLOUDFLARE_ACCOUNT_ID.
+name: anfr-tiles
+
+on:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Republier même si le snapshot est déjà publié'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: anfr-tiles
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROJECT: signalforge-anfr
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Générer les tuiles
+        id: build
+        run: |
+          set -euo pipefail
+          SKIP=""
+          if [ "${{ inputs.force }}" != "true" ]; then SKIP="--skip-if-same data/anfr/index.json"; fi
+          PREV=""
+          if [ -f data/anfr/index.json ]; then PREV="--previous data/anfr/index.json"; fi
+          python3 -I tools/build_tiles.py --download --out public $SKIP $PREV
+          if [ -f public/index.json ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "snapshot=$(python3 -c 'import json;print(json.load(open("public/index.json"))["snapshot"])')" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: En-têtes de cache
+        if: steps.build.outputs.publish == 'true'
+        run: |
+          cat > public/_headers <<'EOF'
+          /index.json
+            Cache-Control: public, max-age=300
+          /tiles/*
+            Cache-Control: public, max-age=3600
+          EOF
+
+      - name: Déployer sur Cloudflare Pages
+        if: steps.build.outputs.publish == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # Premier déploiement : crée le projet (sans erreur s'il existe déjà).
+          npx --yes wrangler@4 pages project list | grep -q "\b${PROJECT}\b" \
+            || npx --yes wrangler@4 pages project create "$PROJECT" --production-branch main
+          npx --yes wrangler@4 pages deploy public --project-name "$PROJECT" --branch main --commit-dirty=true
+
+      - name: Vérifier la publication
+        if: steps.build.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          URL="https://${PROJECT}.pages.dev"
+          for i in $(seq 1 12); do
+            got=$(curl -fsS "$URL/index.json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["snapshot"])' || true)
+            [ "$got" = "${{ steps.build.outputs.snapshot }}" ] && break
+            sleep 10
+          done
+          [ "$got" = "${{ steps.build.outputs.snapshot }}" ] || { echo "index.json en ligne : '$got' ≠ ${{ steps.build.outputs.snapshot }}"; exit 1; }
+          KEY=$(python3 -c 'import json;print(sorted(json.load(open("public/index.json"))["tiles"])[0])')
+          curl -fsS "$URL/tiles/$KEY.json" | python3 -c 'import json,sys;t=json.load(sys.stdin);assert t["v"]==1 and t["s"]'
+          echo "OK : snapshot ${{ steps.build.outputs.snapshot }} en ligne sur $URL"
+
+      - name: Commiter index.json
+        if: steps.build.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p data/anfr
+          cp public/index.json data/anfr/index.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/anfr/index.json
+          if git diff --cached --quiet; then echo 'index.json inchangé'; exit 0; fi
+          git commit -m "anfr: snapshot ${{ steps.build.outputs.snapshot }}"
+          git push
