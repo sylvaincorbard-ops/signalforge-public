@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.0.0",
+  "latestVersion": "1.0.1",
   "iosUrl": "https://apps.apple.com/app/id6783085214",
   "androidUrl": "https://play.google.com/store/apps/details?id=com.signalforge.antennanetworkpro",
-  "notes": "Premier lancement — mettre à jour latestVersion/iosUrl/androidUrl/notes à chaque nouveau build à proposer."
+  "notes": "Hors de France : ajoutez votre clé OpenCelliD gratuite dans les Paramètres. / Outside France: add your free OpenCelliD key in Settings."
 }
